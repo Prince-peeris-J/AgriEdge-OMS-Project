@@ -1,0 +1,143 @@
+#OrderTriggerTest
+
+@isTest
+public class OrderTriggerTest {
+    
+    @testSetup
+    static void setupTestData() {
+        // Create Sample Customer
+        Customer__c cust = new Customer__c(
+            Name = 'Test Customer',
+            Phone__c = '1234567890',
+            Email__c = 'test@example.com',
+            Address__c = '123 Agri St'
+        );
+        insert cust;
+
+        // Create Sample Products
+        List<Product__c> products = new List<Product__c>();
+        
+        // Product 1: High Stock (Stock > Threshold)
+        products.add(new Product__c(
+            Product_Name__c = 'Fertilizer A',
+            Stock_Quantity__c = 100,
+            Threshold_Level__c = 20
+        ));
+        
+        // Product 2: Low Stock (Stock < Threshold)
+        products.add(new Product__c(
+            Product_Name__c = 'Tractor Part B',
+            Stock_Quantity__c = 5,
+            Threshold_Level__c = 10
+        ));
+
+        insert products;
+    }
+    
+    @isTest
+    static void testHighPriorityDueToLowStock() {
+        Product__c lowStockProd = [SELECT Id FROM Product__c WHERE Product_Name__c = 'Tractor Part B' LIMIT 1];
+        Customer__c cust = [SELECT Id FROM Customer__c LIMIT 1];
+        
+        Order__c ord = new Order__c(
+            Customer__c = cust.Id,
+            Product__c = lowStockProd.Id,
+            Quantity__c = 2,
+            Status__c = 'Pending'
+        );
+        
+        Test.startTest();
+        insert ord;
+        Test.stopTest();
+        
+        Order__c insertedOrder = [SELECT Priority__c FROM Order__c WHERE Id = :ord.Id];
+        System.assertEquals('High', insertedOrder.Priority__c, 'Priority should be High due to low stock');
+    }
+    
+    @isTest
+    static void testHighPriorityDueToHighQuantity() {
+        Product__c highStockProd = [SELECT Id FROM Product__c WHERE Product_Name__c = 'Fertilizer A' LIMIT 1];
+        Customer__c cust = [SELECT Id FROM Customer__c LIMIT 1];
+        
+        Order__c ord = new Order__c(
+            Customer__c = cust.Id,
+            Product__c = highStockProd.Id,
+            Quantity__c = 60, // Greater than 50
+            Status__c = 'Pending'
+        );
+        
+        Test.startTest();
+        insert ord;
+        Test.stopTest();
+        
+        Order__c insertedOrder = [SELECT Priority__c FROM Order__c WHERE Id = :ord.Id];
+        System.assertEquals('High', insertedOrder.Priority__c, 'Priority should be High due to high quantity (>50)');
+    }
+    
+    @isTest
+    static void testMediumPriorityNormalConditions() {
+        Product__c highStockProd = [SELECT Id FROM Product__c WHERE Product_Name__c = 'Fertilizer A' LIMIT 1];
+        Customer__c cust = [SELECT Id FROM Customer__c LIMIT 1];
+        
+        Order__c ord = new Order__c(
+            Customer__c = cust.Id,
+            Product__c = highStockProd.Id,
+            Quantity__c = 10, // Normal Quantity
+            Status__c = 'Pending'
+        );
+        
+        Test.startTest();
+        insert ord;
+        Test.stopTest();
+        
+        Order__c insertedOrder = [SELECT Priority__c FROM Order__c WHERE Id = :ord.Id];
+        System.assertEquals('Medium', insertedOrder.Priority__c, 'Priority should be Medium for normal conditions');
+    }
+}
+_____________________________________________________________________________________________________________________________________
+
+
+
+
+#OrderTrigger.trigger
+
+trigger OrderTrigger on Order__c (before insert) {
+    // Collect all Product IDs related to the incoming orders
+    Set<Id> productIds = new Set<Id>();
+    for(Order__c o : Trigger.new){
+        if (o.Product__c != null) {
+            productIds.add(o.Product__c);
+        }
+    }
+    
+    // Query Product details to check Stock vs Threshold
+    Map<Id, Product__c> productMap = new Map<Id, Product__c>();
+    if (!productIds.isEmpty()) {
+        productMap = new Map<Id, Product__c>([
+            SELECT Id, Stock_Quantity__c, Threshold_Level__c 
+            FROM Product__c 
+            WHERE Id IN :productIds
+        ]);
+    }
+    
+    // Assign Priority based on Adaptive Logic
+    for(Order__c o : Trigger.new){
+        if (o.Product__c != null && productMap.containsKey(o.Product__c)) {
+            Product__c p = productMap.get(o.Product__c);
+            
+            // Logic: High priority if stock is low OR order quantity is high (> 50)
+            if(p.Stock_Quantity__c < p.Threshold_Level__c || o.Quantity__c > 50){
+                o.Priority__c = 'High';
+            } else {
+                o.Priority__c = 'Medium';
+            }
+        } else {
+            // Default priority if no product attached
+            o.Priority__c = 'Medium';
+        }
+    }
+}
+_______________________________________________________________________________________________________________________________
+
+
+
